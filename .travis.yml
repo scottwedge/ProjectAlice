@@ -10,8 +10,11 @@ addons:
     token:
       secure: $SONAR_TOKEN
 
+before_install:
+  - sudo apt-get update
+  - sudo apt-get -y install libasound2-dev portaudio19-dev ffmpeg
+
 script:
-  - sudo apt-get update && sudo apt-get install libasound2-dev portaudio19-dev ffmpeg
   - python -m pip install --upgrade pip
   - pip install -r requirements.txt
   - pip install -r requirements_test.txt
