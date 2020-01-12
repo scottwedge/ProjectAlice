@@ -10,6 +10,7 @@ from core.base.SuperManager import SuperManager
 from core.base.model import Intent
 from core.base.model.AliceSkill import AliceSkill
 from core.base.model.GithubCloner import GithubCloner
+from core.base.model.SkillStore import SkillStore
 from core.base.model.Manager import Manager
 from core.base.model.Version import Version
 from core.commons import constants
@@ -343,39 +344,30 @@ class SkillManager(Manager):
 		updateSource = self.ConfigManager.getSkillsUpdateSource()
 
 		updateCount = 0
+		skillStore = SkillStore()
 		for skillName in self._allSkills:
 			try:
 				if skillName not in availableSkills or (skillToCheck is not None and skillName != skillToCheck):
 					continue
 
-				req = requests.get(f'https://raw.githubusercontent.com/project-alice-assistant/ProjectAliceSkills/{updateSource}/PublishedSkills/{availableSkills[skillName]["author"]}/{skillName}/{skillName}.install')
+				skillStore.fetchSkillRemote(skillName)
+				if not skillStore.checkForSkillUpdate(skillName):
+					self.logInfo(f'✔ {skillName} - Up to date')
+					continue
 
-				if req.status_code == 404:
-					raise GithubNotFound
-
-				remoteFile = req.json()
-				if not remoteFile:
-					raise Exception
-
-				if Version(availableSkills[skillName]['version']) < Version(remoteFile['version']):
-					updateCount += 1
-					self.logInfo(f'❌ {skillName} - Version {availableSkills[skillName]["version"]} < {remoteFile["version"]} in {self.ConfigManager.getAliceConfigByName("updateChannel")}')
-
-					if not self.ConfigManager.getAliceConfigByName('skillAutoUpdate'):
-						if skillName in self._activeSkills:
-							self._activeSkills[skillName].updateAvailable = True
-						elif skillName in self._deactivatedSkills:
-							self._deactivatedSkills[skillName].updateAvailable = True
-					else:
-						skillFile = Path(self.Commons.rootDir(), constants.SKILL_INSTALL_TICKET_PATH, skillName + '.install')
-						skillFile.write_text(json.dumps(remoteFile))
-						if skillName in self._failedSkills:
-							del self._failedSkills[skillName]
+				updateCount += 1
+				self.logInfo(f'❌ {skillName} - Update available')
+				
+				if not self.ConfigManager.getAliceConfigByName('skillAutoUpdate'):
+					if skillName in self._activeSkills:
+						self._activeSkills[skillName].updateAvailable = True
+					elif skillName in self._deactivatedSkills:
+						self._deactivatedSkills[skillName].updateAvailable = True
 				else:
-					self.logInfo(f'✔ {skillName} - Version {availableSkills[skillName]["version"]} in {self.ConfigManager.getAliceConfigByName("updateChannel")}')
-
-			except GithubNotFound:
-				self.logInfo(f'❓ Skill "{skillName}" is not available on Github. Deprecated or is it a dev skill?')
+					skillFile = Path(self.Commons.rootDir(), constants.SKILL_INSTALL_TICKET_PATH, skillName + '.install')
+					skillFile.touch()
+					if skillName in self._failedSkills:
+						del self._failedSkills[skillName]
 
 			except Exception as e:
 				self.logError(f'❗ Error checking updates for skill "{skillName}": {e}')
@@ -434,10 +426,12 @@ class SkillManager(Manager):
 		availableSkills = self.ConfigManager.skillsConfigurations
 		skillsToBoot = dict()
 		self.MqttManager.mqttBroadcast(topic='hermes/leds/systemUpdate', payload={'sticky': True})
-		for file in skills:
-			skillName = Path(file).with_suffix('')
 
-			self.logInfo(f'Now taking care of skill {skillName.stem}')
+		skillStore = SkillStore()
+		for file in skills:
+			skillName = Path(file).stem
+
+			self.logInfo(f'Now taking care of skill {skillName}')
 			res = root / file
 
 			try:
@@ -445,7 +439,6 @@ class SkillManager(Manager):
 
 				installFile = json.loads(res.read_text())
 
-				skillName = installFile['name']
 				path = Path(installFile['author'], skillName)
 
 				if not skillName:
